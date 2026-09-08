@@ -1,0 +1,26 @@
+# Adding a new batch source should mean adding an entry here, not new code.
+# The batch ingestion job (ingestion/batch/autoloader_job.py) reads this file
+# and generalizes over every source.
+#
+# Paths below are local-dev defaults (relative to the repo root) -- see
+# docs/build-plan.md's "Local-first path" for Phase 1. For the cloud path,
+# swap raw_path/bronze_table for s3:// locations and Unity Catalog names.
+
+sources:
+  - name: orders
+    format: json
+    raw_path: seed_data/orders/
+    bronze_table: lakehouse/bronze/orders
+    primary_key: order_id
+    # incremental_column is reserved for a future incremental/merge upgrade;
+    # the current local reader does a full-refresh overwrite each run.
+    incremental_column: updated_at
+
+  - name: customers
+    format: csv
+    raw_path: seed_data/customers/
+    bronze_table: lakehouse/bronze/customers
+    primary_key: customer_id
+    incremental_column: updated_at
+    options:
+      header: "true"  # kept for cloud-path (Spark Auto Loader) parity; no-op locally

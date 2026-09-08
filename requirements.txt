@@ -1,0 +1,22 @@
+# Ingestion / streaming
+kafka-python==2.0.2
+pyyaml==6.0.1
+
+# Metadata + orchestration
+dagster==1.8.*
+dagster-webserver==1.8.*
+databricks-sdk==0.30.*
+
+# AI / RAG
+psycopg2-binary==2.9.*
+openai==1.*
+
+# dbt (install separately if you hit resolver conflicts with the above)
+# dbt-databricks==1.8.*
+
+# Local lakehouse (Phase 1 default -- see docs/build-plan.md)
+duckdb==1.1.*
+dbt-duckdb==1.8.*
+deltalake==0.19.*
+pandas==2.2.*
+pyarrow==17.0.*

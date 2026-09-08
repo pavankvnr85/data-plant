@@ -1,0 +1,29 @@
+version: 2
+
+sources:
+  - name: bronze
+    # Local dev (dbt-duckdb): read bronze straight off the local Delta
+    # tables via DuckDB's `delta` extension, no metastore involved.
+    # {name} is substituted per-table by dbt-duckdb. Assumes dbt is invoked
+    # from transform/dbt_project/ (see docs/build-plan.md's local walkthrough)
+    # -- if you run dbt with --project-dir from elsewhere, make this absolute.
+    # Cloud path: replace this with `database: data_plant` + `schema: bronze`
+    # against Unity Catalog.
+    meta:
+      external_location: "delta_scan('../../lakehouse/bronze/{name}')"
+    tables:
+      - name: orders
+        columns:
+          - name: order_id
+            tests:
+              - not_null
+      - name: customers
+        columns:
+          - name: customer_id
+            tests:
+              - not_null
+            # `unique` deliberately lives on stg_customers (models/staging/staging.yml),
+            # not here: bronze legitimately has duplicate customer_id rows across
+            # ingestion runs (each seed batch re-emits the full customer set) --
+            # that's exactly what stg_customers.sql's qualify/row_number dedup exists
+            # to clean up. Testing uniqueness on raw bronze would fail by design.

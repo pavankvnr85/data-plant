@@ -1,0 +1,16 @@
+name: data_plant
+version: "1.0.0"
+config-version: 2
+
+profile: data_plant
+
+model-paths: ["models"]
+
+models:
+  data_plant:
+    staging:
+      +materialized: view
+      +schema: silver
+    marts:
+      +materialized: table
+      +schema: gold

@@ -1,0 +1,28 @@
+# Copy to ~/.dbt/profiles.yml locally -- do NOT commit real host/token
+# values. This file in the repo is a template only.
+
+data_plant:
+  target: local
+  outputs:
+    # Local dev (Phase 1 default, no cloud account needed) -- DuckDB reads
+    # the bronze Delta tables via its `delta` extension. See
+    # docs/build-plan.md's local walkthrough.
+    local:
+      type: duckdb
+      path: "../../lakehouse/warehouse.duckdb"
+      extensions:
+        - delta
+      schema: main
+      threads: 4
+
+    # Cloud path (later phases) -- requires dbt-databricks (see
+    # requirements.txt) and a real Databricks workspace. Switch `target:`
+    # above to `databricks` and set the env vars below to use it.
+    databricks:
+      type: databricks
+      catalog: data_plant
+      schema: silver
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      threads: 4

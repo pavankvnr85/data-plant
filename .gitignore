@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# dbt
+transform/dbt_project/target/
+transform/dbt_project/dbt_packages/
+transform/dbt_project/logs/
+
+# Local lakehouse (Phase 1 generated data - do not commit)
+/lakehouse/
+/seed_data/
+
+# Dagster (Phase 3 local dev): `dagster dev` writes a run-storage tmp dir
+# under cwd when DAGSTER_HOME isn't set; normally self-cleaned on exit, but
+# survives a forced kill.
+orchestration/dagster_project/tmp*/
+orchestration/dagster_project/.dagster/
+
+# Secrets
+.env
+profiles.yml
+*.pem
+
+# OS
+.DS_Store
+
+# IDE
+.idea/

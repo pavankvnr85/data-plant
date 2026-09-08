@@ -1,0 +1,23 @@
+[project]
+name = "data-plant-dagster"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "dagster",
+    "dagster-webserver",
+    # Local dev default: assets.py calls ingestion/batch and transform/
+    # run_dbt.py directly, so it needs their dependencies too (already in
+    # the repo root requirements.txt -- run dagster from that same venv
+    # rather than installing this project standalone).
+    "pandas",
+    "pyyaml",
+    "deltalake",
+    "duckdb",
+    "dbt-duckdb",
+    # Only needed if you swap asset bodies for the cloud path (see
+    # docs/interfaces.md's "Orchestrator" row) -- not imported locally.
+    "databricks-sdk",
+]
+
+[tool.dagster]
+module_name = "data_plant.assets"
