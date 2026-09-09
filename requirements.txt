@@ -20,3 +20,6 @@ dbt-duckdb==1.8.*
 deltalake==0.19.*
 pandas==2.2.*
 pyarrow==17.0.*
+
+# Analytics serving (Phase 5 local default -- see docs/build-plan.md)
+streamlit==1.38.*

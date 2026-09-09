@@ -150,15 +150,77 @@ distinct job names (`dbt_run_silver`/`dbt_run_gold` vs. plain `dbt_run`) so
 they're easy to tell apart.
 
 ## Phase 4 — Streaming use case
-- [ ] `ingestion/streaming/kafka_producer_clickstream.py` generates synthetic events into Redpanda/Kafka
-- [ ] `ingestion/streaming/structured_streaming_job.py` reads the topic, windows and aggregates, merges into a gold Iceberg table
-- [ ] Same metadata emitter instruments this job — batch and streaming show up in one place
+
+**Local-first path:** `docker-compose.yml`'s Redpanda service is a real
+Kafka-wire-protocol broker (kafka-python talks to it exactly like it would
+talk to Apache Kafka), so the producer needed no changes.
+`structured_streaming_job.py` was rewritten off Spark Structured
+Streaming onto plain Python: a `KafkaConsumer` polls in ~15s micro-batches,
+buffers events by 1-minute tumbling window, and only merges a window into
+the local Delta gold table once a watermark says it's closed (mirroring
+`withWatermark()` + `groupBy(window(...))` + `outputMode("append")`) --
+avoiding the need to incrementally merge things like distinct-session
+counts across batches, which plain SQL arithmetic can't do correctly.
+Simplification: window state lives in process memory, not a checkpoint, so
+it doesn't survive a restart; windows still open at shutdown are
+force-flushed instead (see the module docstring). See
+`docs/interfaces.md`'s "Stream processing" row for the swap back to real
+Structured Streaming + checkpointing.
+
+- [x] `ingestion/streaming/kafka_producer_clickstream.py` generates synthetic events into Redpanda/Kafka
+- [x] `ingestion/streaming/structured_streaming_job.py` reads the topic, windows and aggregates, merges into a gold Delta table
+- [x] Same metadata emitter instruments this job -- batch and streaming show up in one place (each micro-batch is its own heartbeat row, `job_type="streaming"`)
 - **Demo artifact:** a streaming gold table updating in near-real-time while the producer runs.
 
+### Local dev walkthrough
+
+```powershell
+# from repo root -- Redpanda must be up first
+docker compose up -d
+
+# option A: one command, ~90s end to end (producer in the background,
+# consumer in the foreground, then prints the gold table + metadata trail)
+python scripts/run_phase4_streaming_demo.py
+
+# option B: two terminals, to actually watch it update in near-real-time
+# terminal 1
+python ingestion/streaming/kafka_producer_clickstream.py
+# terminal 2 (Ctrl+C to stop early; defaults to a 120s bounded run)
+python ingestion/streaming/structured_streaming_job.py
+
+# either way, inspect the result same as any other Delta table:
+python -c "import duckdb; con = duckdb.connect(); print(con.sql(\"select * from delta_scan('lakehouse/gold_streaming/session_activity_1min') order by window_start, event_type\"))"
+```
+
 ## Phase 5 — Analytics serving
-- [ ] Databricks SQL warehouse over gold tables
-- [ ] Connect a BI tool or build 2-3 dashboards (can be as simple as Databricks SQL dashboards)
+
+**Local-first path:** `serving/dashboard.py`, a small Streamlit app --
+chosen over Evidence/Rill/Superset/Metabase/Grafana after comparing DuckDB
+connectivity, setup weight, and toolchain fit (see `docs/interfaces.md`'s
+"BI/serving" row for the comparison summary). It reads two sources through
+two separate connections so the dashboard can never hold a lock that blocks
+a batch write: `main_gold.daily_revenue` via a `read_only` connection to
+`warehouse.duckdb`, and `gold_streaming/session_activity_1min` via
+`delta_scan()` on a fresh in-memory connection that never touches
+`warehouse.duckdb` at all. Verified live: ran `transform/run_dbt.py` (a
+real write to `warehouse.duckdb`) while the dashboard server was up, with
+no lock conflict, because each dashboard query opens and closes its
+connection immediately rather than holding one open.
+
+- [x] Local BI layer over gold tables (Streamlit + DuckDB, in place of a Databricks SQL warehouse)
+- [x] Build 2-3 dashboards: revenue over time, revenue by region, streaming event activity by window/type
 - **Demo artifact:** a dashboard screenshot built on both the batch and streaming gold tables.
+
+### Local dev walkthrough
+
+```powershell
+# from repo root -- needs both the batch and streaming demos run at least
+# once so there's data to show
+python scripts/run_phase1_local_demo.py
+python scripts/run_phase4_streaming_demo.py
+
+streamlit run serving/dashboard.py   # opens http://localhost:8501
+```
 
 ## Phase 6 — AI/RAG serving
 - [ ] Pick a document corpus relevant to the domain you chose (product docs, support tickets, whatever fits)
