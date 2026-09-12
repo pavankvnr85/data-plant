@@ -237,6 +237,17 @@ No API key, no cost. Storage is the `postgres`/pgvector container from
 of requiring a manual migration step. See `docs/interfaces.md`'s
 "Embedding provider" and "Chatbot LLM" rows for the swap back to OpenAI.
 
+`chunk_text()` is structure-aware, not a blind character-window slide:
+markdown table rows (each a self-contained idea -- one row of
+`docs/interfaces.md`'s swap-point table fully describes one component) are
+kept as atomic chunks, and only a block still too long on its own falls
+back to a sliding window. Found this the hard way in Phase 8: naive
+800-char windows were splitting/blending table rows together, so a
+chatbot question about "orchestrator" failed to retrieve the row that
+plainly answers it (diluted with neighboring rows about Kafka instead) --
+re-ingesting with row-aware chunking fixed it, verified by re-asking the
+same question and getting the right row back as its own clean chunk.
+
 - [x] Pick a document corpus relevant to the domain you chose (product docs, support tickets, whatever fits) -- used this repo's own `docs/*.md`
 - [x] `ai_rag/ingest_embeddings.py` chunks and embeds into pgvector (local) — swap to Databricks Vector Search later if you want the "stays in platform" story
 - [x] `ai_rag/vector_store.py` interface, pgvector implementation
@@ -321,9 +332,43 @@ python metadata/wastage_report.py
 ```
 
 ## Phase 8 — Ops chatbot
-- [ ] Reuse `ai_rag/vector_store.py` against `pipeline_runs` + the wastage models + pipeline docs
-- [ ] `ai_rag/chatbot.py` — ask "which pipelines cost the most last week", "why did X fail last night", "what tables are unused"
+
+**Local-first path:** `ai_rag/chatbot.py`'s router picks between two paths
+per question -- `structured_lookup()` runs one of four SQL tools against
+`pipeline_runs` (reusing the exact same `metadata/wastage_models/*.sql`
+files Phase 7 built, unchanged), or `doc_search()` falls back to vector
+search over the Phase 6 corpus (reusing `ai_rag/ask.py`'s
+`retrieve()`/`build_context()`, so there's one embedding call site across
+both scripts, not two). Same Ollama setup as Phase 6, no API key.
+
+Since a 3B local model is inconsistent about fully enumerating a
+multi-row SQL result in its prose (verified: asked it to summarize a
+4-row "unused tables" result, it mentioned 2), `ask()` returns the raw
+tool context alongside the LLM's answer and `__main__` prints both --
+the module's own docstring already claimed the SQL path is "deterministic
+and auditable"; this is what actually makes that true instead of aspirational.
+
+- [x] Reuse `ai_rag/vector_store.py` against `pipeline_runs` + the wastage models + pipeline docs
+- [x] `ai_rag/chatbot.py` — ask "which pipelines cost the most last week", "why did X fail last night", "what tables are unused"
 - **Demo artifact:** a short recorded Q&A session, 5-6 real questions with correct answers.
+
+### Local dev walkthrough
+
+```powershell
+# needs real pipeline_runs history (see Phase 7) and an ingested corpus
+# (see Phase 6) to have anything to answer from
+python ai_rag/chatbot.py "Which pipelines cost the most last week?"
+python ai_rag/chatbot.py "Why did a pipeline fail recently?"
+python ai_rag/chatbot.py "What tables are unused or wasteful?"
+python ai_rag/chatbot.py "Is any pipeline getting slower over time?"
+python ai_rag/chatbot.py "Why does the local dev path avoid Spark?"
+```
+
+Verified live against real history: the failure question correctly
+surfaced an actually-triggered failure (a source pointing at a missing raw
+data directory) with its real error message; the cost/trend questions
+matched `wastage_report.py`'s own numbers exactly, since both read the
+same `pipeline_runs` table the same way.
 
 ## Phase 9 — Polish for resume
 - [ ] Architecture diagram in `docs/architecture.md`

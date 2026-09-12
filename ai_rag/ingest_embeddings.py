@@ -30,13 +30,69 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 EMBEDDING_MODEL = "nomic-embed-text"
 
 
-def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+def _split_into_blocks(text: str) -> list[str]:
+    """Markdown table rows (lines starting with '|') are each their own
+    atomic block; everything else is grouped into blank-line-separated
+    paragraphs. Table rows in particular are one complete, self-contained
+    idea (e.g. docs/interfaces.md: one row = one swap point, described end
+    to end) -- blind character-window chunking was splitting rows apart or
+    blending unrelated rows together, which measurably hurt retrieval (a
+    chatbot question about "orchestrator" failed to surface the row that
+    plainly answers it, because the chunk holding it was diluted with
+    neighboring rows about Kafka and message brokers instead)."""
+    blocks = []
+    paragraph_lines: list[str] = []
+
+    def flush_paragraph():
+        if paragraph_lines:
+            blocks.append("\n".join(paragraph_lines).strip())
+            paragraph_lines.clear()
+
+    for line in text.splitlines():
+        if line.strip().startswith("|"):
+            flush_paragraph()
+            blocks.append(line.strip())
+        elif not line.strip():
+            flush_paragraph()
+        else:
+            paragraph_lines.append(line)
+    flush_paragraph()
+    return [b for b in blocks if b]
+
+
+def _sliding_window(text: str, size: int, overlap: int) -> list[str]:
     chunks = []
     start = 0
     while start < len(text):
         end = start + size
         chunks.append(text[start:end])
         start = end - overlap
+    return chunks
+
+
+def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    """Pack table rows/paragraphs (see _split_into_blocks) into chunks up
+    to `size`, keeping each block whole and never blending unrelated ones
+    unless they're small enough to share a chunk. Only a single block
+    that's already bigger than `size` on its own falls back to the old
+    sliding-character-window behavior, and even then it never mixes with
+    a neighboring block's content."""
+    chunks = []
+    buffer = ""
+    for block in _split_into_blocks(text):
+        if len(block) > size:
+            if buffer:
+                chunks.append(buffer)
+                buffer = ""
+            chunks.extend(_sliding_window(block, size, overlap))
+            continue
+        if buffer and len(buffer) + len(block) + 1 > size:
+            chunks.append(buffer)
+            buffer = block
+        else:
+            buffer = f"{buffer}\n{block}" if buffer else block
+    if buffer:
+        chunks.append(buffer)
     return chunks
 
 

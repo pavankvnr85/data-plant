@@ -60,7 +60,7 @@ See `docs/build-plan.md` for the full phased plan. Short version:
 8. Wastage detection models
 9. Ops chatbot (RAG over metadata)
 
-Items 2-8 above (`docs/build-plan.md`'s Phases 1-7) are done and runnable
+Items 2-9 above (`docs/build-plan.md`'s Phases 1-8) are done and runnable
 entirely locally today -- no cloud account needed, see "Local dev" below.
 
 ## 1. Account setup (do this first)
@@ -87,9 +87,9 @@ Because the trial is time-boxed, don't activate it until you've done step 2 belo
 
 ## Local dev (no cloud needed for iteration)
 
-Phases 1-7 (batch lakehouse, pipeline metadata, orchestration, streaming,
-analytics serving, AI/RAG, wastage detection) run entirely on your laptop,
-no AWS/Databricks account and no API keys required: `deltalake` (delta-rs) for bronze,
+Phases 1-8 (batch lakehouse, pipeline metadata, orchestration, streaming,
+analytics serving, AI/RAG, wastage detection, ops chatbot) run entirely on
+your laptop, no AWS/Databricks account and no API keys required: `deltalake` (delta-rs) for bronze,
 `dbt-duckdb` for silver/gold, Dagster for the asset graph and schedule,
 Redpanda (a real Kafka-protocol broker, via Docker) for the streaming
 source, Streamlit for the dashboard, Ollama (local embeddings + LLM) and
@@ -127,6 +127,13 @@ python ai_rag/ask.py "What message broker does the streaming phase use locally?"
 # phase 7: wastage detection over real pipeline_runs history -- run the
 # batch/streaming demos a few times first so there's a real trend to find
 python metadata/wastage_report.py
+
+# phase 8: ops chatbot -- SQL tools over pipeline_runs (reusing phase 7's
+# wastage queries) or doc search (reusing phase 6's corpus), routed by
+# keyword match; prints the raw data behind the answer too, not just the
+# LLM's summary
+python ai_rag/chatbot.py "Which pipelines cost the most last week?"
+python ai_rag/chatbot.py "Why did a pipeline fail recently?"
 ```
 
 Point Spark/Databricks/OpenAI at the cloud only when you're ready to run
