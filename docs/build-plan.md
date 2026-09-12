@@ -305,16 +305,29 @@ Verified live: ran the batch demo 8x (growing bronze data 5,000 -> 40,000
 orders) plus the streaming demo once, then ran the report against that
 real history -- it correctly cleared bronze (genuinely read by every dbt
 run) while flagging the streaming gold table (genuinely never read
-downstream) and all three dbt-built tables (flagged due to a known,
-documented limitation: job-level lineage can't see that dbt's own
-`daily_revenue` model consumes `stg_orders`/`stg_customers` internally,
-only that no *other* job declared them as an input -- real OpenLineage
-would get this from dbt's manifest.json instead), and a genuine (not
-fabricated) rising-runtime trend on `autoloader_orders` from the growing
-data volume.
+downstream) and all three dbt-built tables, a false positive at the time:
+job-level lineage couldn't see that dbt's own `daily_revenue` model
+consumes `stg_orders`/`stg_customers` internally, only that no *other* job
+declared them as an input. Also found a genuine (not fabricated)
+rising-runtime trend on `autoloader_orders` from the growing data volume.
+
+**Update:** the dbt false positive above is fixed -- see
+`metadata/table_reads.py`, added after using this project's own wastage
+report as the worked example for "what future enhancement is worth doing
+now." `transform/run_dbt.py` now parses dbt's own `manifest.json` after
+each run to get the real per-model dependency graph (exactly what real
+OpenLineage would use with dbt) and logs each edge; `serving/dashboard.py`
+logs a read too when it actually loads a gold table, so a table someone is
+genuinely looking at isn't flagged either. `unused_tables.sql` now unions
+this against the `input_tables` fallback. Verified: re-ran the full demo
+and the report went from 4 tables flagged (3 false positives, 1 real) to
+0 (everything genuinely consumed), then to exactly 1 (only
+`gold_streaming`, correctly, since nothing reads it) once the streaming
+demo ran without a dashboard view -- confirming the fix doesn't
+over-correct into false negatives either.
 
 - [x] `metadata/wastage_models/` — SQL/dbt models over `pipeline_runs`:
-  - [x] tables written but never read downstream (join against query history if available, or track reads via the emitter too) -- local dev uses the emitter's `input_tables` fallback (see `unused_tables.sql`'s comment for the known limitation)
+  - [x] tables written but never read downstream (join against query history if available, or track reads via the emitter too) -- local dev populates `table_reads` from dbt's manifest.json + dashboard views (`metadata/table_reads.py`), unioned with the emitter's `input_tables` as a secondary fallback (see `unused_tables.sql`)
   - [x] jobs with a rising runtime trend over the last N runs (last-5-vs-prior-5 average, `cost_and_runtime_trend.sql`)
   - [x] near-duplicate pipelines producing overlapping output schemas (`wastage_report.py`'s `check_duplicate_schemas`, column-overlap based)
   - [x] estimated cost per pipeline (`openlineage_emitter.py`'s `LOCAL_DEV_HOURLY_RATE_USD` proxy -- duration x a nominal rate, computed automatically in `end_run()` for every job type)
@@ -371,7 +384,20 @@ matched `wastage_report.py`'s own numbers exactly, since both read the
 same `pipeline_runs` table the same way.
 
 ## Phase 9 — Polish for resume
-- [ ] Architecture diagram in `docs/architecture.md`
-- [ ] `docs/interfaces.md` documenting every swap point (vector store, orchestrator, warehouse)
-- [ ] Record a 3-5 minute demo video
-- [ ] Write real numbers into the README (e.g. "identified N% of pipelines producing tables with zero downstream reads")
+
+`docs/architecture.md` had gone stale -- it still described the original
+Spark/Databricks/Unity Catalog design from before the Phase 1 local-first
+pivot and never got touched across any of the 8 phases since. Rewrote it
+to describe what was actually built (a Mermaid diagram of the real local
+system, replacing the old cloud-only ASCII sketch, plus layer notes
+matching the current implementation) rather than the aspirational
+original. `docs/interfaces.md` needed no rewrite -- it had already been
+kept current incrementally through every phase and covers every swap
+point (storage, compute, orchestrator, message broker, vector store,
+embedding/LLM provider, BI/serving, wastage detection) with real
+file/function references.
+
+- [x] Architecture diagram in `docs/architecture.md`
+- [x] `docs/interfaces.md` documenting every swap point (vector store, orchestrator, warehouse)
+- [ ] Record a 3-5 minute demo video -- skipped per user
+- [x] Write real numbers into the README -- see "Proof it works," captured from one real end-to-end run (all 8 local phases, reproducible via the commands below)

@@ -12,8 +12,14 @@ clean way to reach a Python emitter from inside one. `dbtRunner` gives back
 a typed result object (per-model status/timing) we can feed straight into
 the emitter instead.
 
+Also records each model's real dependencies (via dbt's own manifest.json)
+into metadata/table_reads.py's append-only log, so Phase 7's unused-tables
+check can see that e.g. daily_revenue genuinely reads
+stg_orders/stg_customers internally -- see _record_dependency_reads().
+
 Run from anywhere: python transform/run_dbt.py
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -30,6 +36,7 @@ sys.path.append(str(REPO_ROOT / "metadata"))
 sys.path.append(str(REPO_ROOT / "ingestion" / "batch"))
 from openlineage_emitter import PipelineRunEmitter  # noqa: E402
 from autoloader_job import load_sources  # noqa: E402
+from table_reads import record_table_read  # noqa: E402
 
 
 def _bronze_table_paths() -> list[str]:
@@ -42,6 +49,37 @@ def _bronze_table_paths() -> list[str]:
     unused-tables check flagged bronze as unused even though dbt reads it
     every run)."""
     return [str(REPO_ROOT / s["bronze_table"]) for s in load_sources()]
+
+
+def _bronze_paths_by_source_name() -> dict[str, str]:
+    return {s["name"]: str(REPO_ROOT / s["bronze_table"]) for s in load_sources()}
+
+
+def _record_dependency_reads(job_name: str, results) -> None:
+    """dbt's own manifest.json has the real per-model dependency graph --
+    this is what lets unused_tables.sql see that daily_revenue genuinely
+    reads stg_orders/stg_customers internally within a single `dbt run`,
+    instead of only knowing this job's own declared input_tables (bronze
+    only). Reading manifest.json (rather than relying solely on this
+    invocation's own result nodes) also makes this correct for a partial
+    `--select` run, like Dagster's silver_models/daily_revenue_gold split,
+    where a model's dependency might not be part of *this* invocation's
+    results at all."""
+    with open(DBT_PROJECT_DIR / "target" / "manifest.json", encoding="utf-8") as f:
+        manifest = json.load(f)
+    bronze_paths = _bronze_paths_by_source_name()
+
+    for r in results:
+        for dep_id in r.node.depends_on.nodes:
+            if dep_id.startswith("model."):
+                dep_node = manifest["nodes"][dep_id]
+                table_name = f"{dep_node['schema']}.{dep_node['name']}"
+            elif dep_id.startswith("source."):
+                table_name = bronze_paths.get(manifest["sources"][dep_id]["name"])
+            else:
+                continue
+            if table_name:
+                record_table_read(table_name=table_name, reader_job=job_name)
 
 
 def count_rows(relations: list[tuple[str, str]]) -> int:
@@ -57,7 +95,7 @@ def count_rows(relations: list[tuple[str, str]]) -> int:
     return total
 
 
-def _invoke_dbt(select: Optional[str]) -> tuple[int, list[str]]:
+def _invoke_dbt(select: Optional[str], job_name: str) -> tuple[int, list[str]]:
     # dbt resolves profiles.yml's relative warehouse path -- and the bronze
     # sources' relative delta_scan() path -- against the current working
     # directory, so both the dbt run and the row-count query below have to
@@ -73,6 +111,7 @@ def _invoke_dbt(select: Optional[str]) -> tuple[int, list[str]]:
 
         relations = [(r.node.schema, r.node.name) for r in result.result.results]
         rows_written = count_rows(relations)
+        _record_dependency_reads(job_name, result.result.results)
     finally:
         os.chdir(original_cwd)
 
@@ -100,7 +139,7 @@ def run_dbt_job(
     )
 
     try:
-        rows_written, output_tables = _invoke_dbt(select)
+        rows_written, output_tables = _invoke_dbt(select, job_name)
     except Exception as e:
         emitter.fail_run(job_name=job_name, error=str(e), run=run)
         raise

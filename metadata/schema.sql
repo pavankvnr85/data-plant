@@ -28,9 +28,15 @@ USING DELTA
 PARTITIONED BY (job_type);
 
 -- Separate, append-only log of table reads, used by the wastage models to
--- find tables that are written but never queried downstream. Populate this
--- from query history (Databricks system tables: system.query.history) once
--- available, or from the emitter's input_tables field as a fallback.
+-- find tables that are written but never queried downstream. Cloud path:
+-- populate from query history (Databricks system tables:
+-- system.query.history), catching every ad hoc BI read too. Local dev
+-- (metadata/table_reads.py) populates it from two narrower but real
+-- sources instead: dbt's own manifest.json (transform/run_dbt.py records
+-- each model's actual dependencies -- what real OpenLineage would use
+-- with dbt) and serving/dashboard.py recording when it loads a gold
+-- table. The emitter's input_tables field remains a job-level fallback
+-- on top of this (see unused_tables.sql).
 CREATE TABLE IF NOT EXISTS data_plant.metadata.table_reads (
     table_name  STRING,
     read_at     TIMESTAMP,

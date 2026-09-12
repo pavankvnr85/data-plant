@@ -35,6 +35,7 @@ from vector_store import PgVectorStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_RUNS_PATH = (REPO_ROOT / "lakehouse" / "metadata" / "pipeline_runs").as_posix()
+TABLE_READS_PATH = REPO_ROOT / "lakehouse" / "metadata" / "table_reads"
 WASTAGE_MODELS_DIR = REPO_ROOT / "metadata" / "wastage_models"
 
 SQL_TOOLS = {
@@ -64,6 +65,18 @@ def structured_lookup(con: duckdb.DuckDBPyConnection, tool_name: str) -> list[di
     # question never touches pipeline_runs, and shouldn't fail just because
     # no pipeline has run yet (e.g. a fresh clone with an empty lakehouse/).
     con.sql(f"create or replace view pipeline_runs as select * from delta_scan('{PIPELINE_RUNS_PATH}')")
+    if TABLE_READS_PATH.exists():
+        con.sql(
+            f"create or replace view table_reads as select * from delta_scan('{TABLE_READS_PATH.as_posix()}')"
+        )
+    else:
+        con.sql(
+            "create or replace view table_reads as select "
+            "cast(null as varchar) as table_name, "
+            "cast(null as timestamp) as read_at, "
+            "cast(null as varchar) as reader_job "
+            "where false"
+        )
     query = SQL_TOOLS[tool_name]
     if isinstance(query, Path):
         query = query.read_text()

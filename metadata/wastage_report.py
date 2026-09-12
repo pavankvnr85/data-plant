@@ -28,6 +28,7 @@ import duckdb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_RUNS_PATH = (REPO_ROOT / "lakehouse" / "metadata" / "pipeline_runs").as_posix()
+TABLE_READS_PATH = REPO_ROOT / "lakehouse" / "metadata" / "table_reads"
 WAREHOUSE_PATH = REPO_ROOT / "lakehouse" / "warehouse.duckdb"
 WASTAGE_MODELS_DIR = Path(__file__).parent / "wastage_models"
 
@@ -38,6 +39,18 @@ SCHEMA_OVERLAP_THRESHOLD = 0.5  # flag output pairs sharing >=50% of columns
 def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     con.sql(f"create view pipeline_runs as select * from delta_scan('{PIPELINE_RUNS_PATH}')")
+    if TABLE_READS_PATH.exists():
+        con.sql(f"create view table_reads as select * from delta_scan('{TABLE_READS_PATH.as_posix()}')")
+    else:
+        # No dbt run has happened yet to populate it -- an empty relation
+        # with the right columns so unused_tables.sql's UNION still works.
+        con.sql(
+            "create view table_reads as select "
+            "cast(null as varchar) as table_name, "
+            "cast(null as timestamp) as read_at, "
+            "cast(null as varchar) as reader_job "
+            "where false"
+        )
     return con
 
 

@@ -14,8 +14,15 @@ needs the file exclusive -- see docs/interfaces.md):
     streaming job): queried via delta_scan() on a fresh in-memory
     connection, never touching warehouse.duckdb's file lock at all.
 
+Each successful load also records a table_reads entry (see
+metadata/table_reads.py) -- otherwise a gold table someone is actually
+looking at right now would still show up in Phase 7's unused-tables
+report, since nothing else in the platform re-reads gold tables through a
+tracked pipeline run.
+
 Run: streamlit run serving/dashboard.py
 """
+import sys
 from pathlib import Path
 
 import duckdb
@@ -25,6 +32,9 @@ import streamlit as st
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WAREHOUSE_PATH = REPO_ROOT / "lakehouse" / "warehouse.duckdb"
 STREAMING_GOLD_PATH = REPO_ROOT / "lakehouse" / "gold_streaming" / "session_activity_1min"
+
+sys.path.append(str(REPO_ROOT / "metadata"))
+from table_reads import record_table_read  # noqa: E402
 
 st.set_page_config(page_title="Data Plant", layout="wide")
 st.title("Data Plant -- Analytics")
@@ -38,7 +48,9 @@ def load_daily_revenue() -> pd.DataFrame:
     if not WAREHOUSE_PATH.exists():
         return pd.DataFrame()
     with duckdb.connect(str(WAREHOUSE_PATH), read_only=True) as con:
-        return con.sql("select * from main_gold.daily_revenue order by order_date").df()
+        df = con.sql("select * from main_gold.daily_revenue order by order_date").df()
+    record_table_read(table_name="main_gold.daily_revenue", reader_job="streamlit_dashboard")
+    return df
 
 
 @st.cache_data(ttl=10)
@@ -46,10 +58,12 @@ def load_session_activity() -> pd.DataFrame:
     if not STREAMING_GOLD_PATH.exists():
         return pd.DataFrame()
     with duckdb.connect() as con:
-        return con.sql(
+        df = con.sql(
             f"select * from delta_scan('{STREAMING_GOLD_PATH.as_posix()}') "
             "order by window_start, event_type"
         ).df()
+    record_table_read(table_name=str(STREAMING_GOLD_PATH), reader_job="streamlit_dashboard")
+    return df
 
 
 revenue = load_daily_revenue()

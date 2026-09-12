@@ -1,24 +1,23 @@
--- Tables written by a pipeline but never read as an input by any other
--- pipeline run. Candidates for deprecation.
+-- Tables written by a pipeline but never read -- either as another job's
+-- declared input_tables, or (more precisely) via table_reads, populated
+-- from dbt's real per-model dependency graph (transform/run_dbt.py parses
+-- manifest.json) and from serving/dashboard.py recording when a human
+-- actually views a gold table. Candidates for deprecation.
 --
--- Local dev: there's no real query-history system table to check against
--- (see schema.sql's `table_reads` comment), so this uses the emitter's own
--- input_tables field as the documented fallback -- if any run ever
--- declared this table as one of its inputs, it isn't "unused."
+-- This used to only check input_tables, which is job-level lineage: it
+-- couldn't see that dbt's own daily_revenue model reads
+-- stg_orders/stg_customers internally within a single `dbt run`
+-- invocation, so those tables were always wrongly flagged as unused even
+-- though they plainly aren't. table_reads closes that gap with dbt's
+-- actual manifest.json-derived dependency graph -- the same source real
+-- OpenLineage would use -- and additionally means a gold table someone is
+-- genuinely looking at via the dashboard doesn't get flagged either. The
+-- cloud path would populate table_reads from Databricks' real
+-- system.query.history instead, catching ad hoc BI reads this local
+-- version can only catch for the one dashboard it knows about.
 --
--- Known limitation of that fallback: it's job-level lineage, not
--- column/table-level. A dbt run's own intermediate silver models are
--- consumed *within* the same job (by the same `dbt run` invocation) and
--- never separately declared as another job's input, so they can show up
--- here even though they're not actually unused -- real OpenLineage would
--- get this from dbt's manifest.json instead. Ad hoc BI/dashboard reads
--- (serving/dashboard.py) also aren't tracked, since a dashboard query
--- isn't a "job" that calls the emitter. The cloud path closes both gaps
--- by joining against `table_reads`, populated from Databricks' real
--- system.query.history.
---
--- Assumes a `pipeline_runs` relation is already registered on the calling
--- connection (see metadata/wastage_report.py).
+-- Assumes `pipeline_runs` and `table_reads` relations are already
+-- registered on the calling connection (see metadata/wastage_report.py).
 
 WITH written_unnested AS (
     SELECT unnest(output_tables) AS table_name, ended_at
@@ -34,6 +33,9 @@ read AS (
     SELECT DISTINCT unnest(input_tables) AS table_name
     FROM pipeline_runs
     WHERE input_tables IS NOT NULL
+    UNION
+    SELECT DISTINCT table_name
+    FROM table_reads
 )
 SELECT
     w.table_name,
