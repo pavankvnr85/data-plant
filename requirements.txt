@@ -8,6 +8,11 @@ dagster-webserver==1.8.*
 databricks-sdk==0.30.*
 
 # AI / RAG
+# Local dev default (Phase 6): embeddings + LLM both run via Ollama
+# (https://ollama.com -- separate install, not a pip package), through its
+# OpenAI-compatible API, so the `openai` client below is reused as-is.
+# `ollama pull nomic-embed-text && ollama pull llama3.2:3b` before running
+# ai_rag/ingest_embeddings.py or ai_rag/ask.py -- see docs/build-plan.md.
 psycopg2-binary==2.9.*
 openai==1.*
 

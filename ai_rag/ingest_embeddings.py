@@ -8,9 +8,13 @@ Two corpora feed this platform:
                         structured stats (via SQL, see chatbot.py) and
                         unstructured context (READMEs, incident notes).
 
-Uses Anthropic's embedding-compatible flow is not applicable here -- Claude
-doesn't serve embeddings, so this uses OpenAI's embedding API as the
-default. Swap `embed_texts` for any provider; nothing else changes.
+Local dev default: Ollama's `nomic-embed-text`, running fully offline, no
+API key. Ollama serves an OpenAI-compatible `/v1/embeddings` endpoint, so
+this still goes through the `openai` client already in requirements.txt --
+just pointed at localhost with a dummy key -- rather than needing a new
+Python dependency. Swap `embed_texts` for a real provider (e.g. OpenAI's
+`text-embedding-3-small`) later; nothing else changes, aside from also
+updating `PgVectorStore`'s `dims` to match the new model's output size.
 """
 import argparse
 import glob
@@ -21,6 +25,9 @@ from vector_store import Document, PgVectorStore
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
+
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+EMBEDDING_MODEL = "nomic-embed-text"
 
 
 def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -37,8 +44,8 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     """Swap this for whatever embedding provider you're using."""
     from openai import OpenAI
 
-    client = OpenAI()
-    response = client.embeddings.create(model="text-embedding-3-small", input=texts)
+    client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    response = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
     return [d.embedding for d in response.data]
 
 
@@ -54,7 +61,12 @@ def load_corpus(path_glob: str) -> list[tuple[str, str]]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus-path", required=True, help="Glob for source docs, e.g. 'docs/**/*.md'")
-    parser.add_argument("--dsn", default=os.environ.get("PGVECTOR_DSN", "postgresql://localhost:5432/data_plant"))
+    parser.add_argument(
+        "--dsn",
+        default=os.environ.get(
+            "PGVECTOR_DSN", "postgresql://data_plant:data_plant@localhost:5432/data_plant"
+        ),
+    )
     args = parser.parse_args()
 
     store = PgVectorStore(dsn=args.dsn)

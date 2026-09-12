@@ -1,26 +1,43 @@
--- Tables that pipelines have written to in the last 30 days but that no
--- job has read from in the same window. Candidates for deprecation.
--- Run as a dbt model (transform/dbt_project/models/marts) or standalone SQL.
+-- Tables written by a pipeline but never read as an input by any other
+-- pipeline run. Candidates for deprecation.
+--
+-- Local dev: there's no real query-history system table to check against
+-- (see schema.sql's `table_reads` comment), so this uses the emitter's own
+-- input_tables field as the documented fallback -- if any run ever
+-- declared this table as one of its inputs, it isn't "unused."
+--
+-- Known limitation of that fallback: it's job-level lineage, not
+-- column/table-level. A dbt run's own intermediate silver models are
+-- consumed *within* the same job (by the same `dbt run` invocation) and
+-- never separately declared as another job's input, so they can show up
+-- here even though they're not actually unused -- real OpenLineage would
+-- get this from dbt's manifest.json instead. Ad hoc BI/dashboard reads
+-- (serving/dashboard.py) also aren't tracked, since a dashboard query
+-- isn't a "job" that calls the emitter. The cloud path closes both gaps
+-- by joining against `table_reads`, populated from Databricks' real
+-- system.query.history.
+--
+-- Assumes a `pipeline_runs` relation is already registered on the calling
+-- connection (see metadata/wastage_report.py).
 
-WITH written AS (
-    SELECT DISTINCT output_table AS table_name, MAX(ended_at) AS last_written
-    FROM data_plant.metadata.pipeline_runs
-    WHERE status = 'success'
-      AND output_table IS NOT NULL
-      AND ended_at >= current_timestamp() - INTERVAL 30 DAYS
-    GROUP BY output_table
+WITH written_unnested AS (
+    SELECT unnest(output_tables) AS table_name, ended_at
+    FROM pipeline_runs
+    WHERE status = 'success' AND output_tables IS NOT NULL
+),
+written AS (
+    SELECT table_name, MAX(ended_at) AS last_written
+    FROM written_unnested
+    GROUP BY table_name
 ),
 read AS (
-    SELECT DISTINCT table_name, MAX(read_at) AS last_read
-    FROM data_plant.metadata.table_reads
-    WHERE read_at >= current_timestamp() - INTERVAL 30 DAYS
-    GROUP BY table_name
+    SELECT DISTINCT unnest(input_tables) AS table_name
+    FROM pipeline_runs
+    WHERE input_tables IS NOT NULL
 )
 SELECT
     w.table_name,
-    w.last_written,
-    r.last_read,
-    CASE WHEN r.table_name IS NULL THEN true ELSE false END AS is_unused
+    w.last_written
 FROM written w
 LEFT JOIN read r ON w.table_name = r.table_name
 WHERE r.table_name IS NULL

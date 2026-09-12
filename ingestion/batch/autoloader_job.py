@@ -71,7 +71,7 @@ def ingest_source(source: dict, emitter: PipelineRunEmitter) -> None:
         run,
         status="success",
         rows_written=len(df),
-        output_table=bronze_path,
+        output_tables=[bronze_path],
     )
 
 

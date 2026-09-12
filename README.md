@@ -39,11 +39,11 @@ Dagster, Snowflake for Databricks.
 | `infra/databricks` | Unity Catalog, external locations, cluster policies |
 | `ingestion/batch` | Config-driven Auto Loader jobs |
 | `ingestion/streaming` | Kafka producer + windowed streaming consumer (local dev: plain Python, no Spark; see `docs/interfaces.md`) |
-| `transform/dbt_project` | dbt models for silver/gold and wastage detection |
+| `transform/dbt_project` | dbt models for silver/gold |
 | `orchestration/dagster_project` | Dagster assets wiring everything together |
-| `metadata` | Metadata table schema + OpenLineage emitter |
+| `metadata` | Metadata table schema, OpenLineage emitter, wastage detection (`wastage_report.py`) |
 | `serving` | Analytics dashboard over gold tables (local dev: Streamlit; see `docs/interfaces.md`) |
-| `ai_rag` | Vector store interface + ops chatbot |
+| `ai_rag` | Vector store interface, embedding ingestion, retrieval + answer script, ops chatbot (local dev: Ollama; see `docs/interfaces.md`) |
 | `docs` | Architecture notes, interface contracts, build log |
 
 ## Build order
@@ -60,7 +60,7 @@ See `docs/build-plan.md` for the full phased plan. Short version:
 8. Wastage detection models
 9. Ops chatbot (RAG over metadata)
 
-Items 2-6 above (`docs/build-plan.md`'s Phases 1-5) are done and runnable
+Items 2-8 above (`docs/build-plan.md`'s Phases 1-7) are done and runnable
 entirely locally today -- no cloud account needed, see "Local dev" below.
 
 ## 1. Account setup (do this first)
@@ -87,13 +87,14 @@ Because the trial is time-boxed, don't activate it until you've done step 2 belo
 
 ## Local dev (no cloud needed for iteration)
 
-Phases 1-5 (batch lakehouse, pipeline metadata, orchestration, streaming,
-analytics serving) run entirely on your laptop, no AWS/Databricks account
-required: `deltalake` (delta-rs) for bronze, `dbt-duckdb` for silver/gold,
-Dagster for the asset graph and schedule, Redpanda (a real Kafka-protocol
-broker, via Docker) for the streaming source, Streamlit for the dashboard.
-See the "Local-first path" note under each phase in `docs/build-plan.md`
-for the full walkthrough, or run it in one shot:
+Phases 1-7 (batch lakehouse, pipeline metadata, orchestration, streaming,
+analytics serving, AI/RAG, wastage detection) run entirely on your laptop,
+no AWS/Databricks account and no API keys required: `deltalake` (delta-rs) for bronze,
+`dbt-duckdb` for silver/gold, Dagster for the asset graph and schedule,
+Redpanda (a real Kafka-protocol broker, via Docker) for the streaming
+source, Streamlit for the dashboard, Ollama (local embeddings + LLM) and
+Postgres/pgvector for RAG. See the "Local-first path" note under each phase
+in `docs/build-plan.md` for the full walkthrough, or run it in one shot:
 
 ```powershell
 pip install -r requirements.txt
@@ -114,8 +115,20 @@ python scripts/run_phase4_streaming_demo.py
 
 # phase 5: dashboard over both the batch and streaming gold tables
 streamlit run serving/dashboard.py   # http://localhost:8501
+
+# phase 6: local RAG over this repo's own docs -- one-time model pull,
+# then ingest + ask
+winget install --id Ollama.Ollama
+ollama pull nomic-embed-text
+ollama pull llama3.2:3b
+python ai_rag/ingest_embeddings.py --corpus-path "docs/*.md"
+python ai_rag/ask.py "What message broker does the streaming phase use locally?"
+
+# phase 7: wastage detection over real pipeline_runs history -- run the
+# batch/streaming demos a few times first so there's a real trend to find
+python metadata/wastage_report.py
 ```
 
-`docker-compose.yml`'s Postgres/pgvector container is only needed later,
-for the RAG work (Phase 6). Point Spark/Databricks jobs at the cloud only
-when you're ready to run them for real.
+Point Spark/Databricks/OpenAI at the cloud only when you're ready to run
+them for real -- everything above is free and offline once the one-time
+Docker images and Ollama models are pulled.

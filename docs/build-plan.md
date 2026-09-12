@@ -57,7 +57,7 @@ python -c "import duckdb; con = duckdb.connect('lakehouse/warehouse.duckdb'); pr
 
 # 8. confirm pipeline metadata (Phase 2 acceptance artifact): one row per
 # ingestion run plus one per dbt run, upserted by run_id
-python -c "import duckdb; con = duckdb.connect(); print(con.sql(\"select job_name, job_type, status, rows_written, output_table from delta_scan('lakehouse/metadata/pipeline_runs') order by started_at\"))"
+python -c "import duckdb; con = duckdb.connect(); print(con.sql(\"select job_name, job_type, status, rows_written, output_tables from delta_scan('lakehouse/metadata/pipeline_runs') order by started_at\"))"
 ```
 
 Or run all of the above in one shot: `python scripts/run_phase1_local_demo.py`.
@@ -223,19 +223,102 @@ streamlit run serving/dashboard.py   # opens http://localhost:8501
 ```
 
 ## Phase 6 — AI/RAG serving
-- [ ] Pick a document corpus relevant to the domain you chose (product docs, support tickets, whatever fits)
-- [ ] `ai_rag/ingest_embeddings.py` chunks and embeds into pgvector (local) — swap to Databricks Vector Search later if you want the "stays in platform" story
-- [ ] `ai_rag/vector_store.py` interface, pgvector implementation
-- [ ] Simple retrieval + LLM answer script
+
+**Local-first path:** corpus is this repo's own `docs/*.md` -- on-domain,
+free, no external corpus to source. Both the embedding model
+(`nomic-embed-text`) and the answer LLM (`llama3.2:3b`) run locally via
+[Ollama](https://ollama.com), which serves OpenAI-compatible endpoints on
+`localhost:11434` -- so `ingest_embeddings.py` and the new `ask.py` still
+go through the `openai` Python client already in `requirements.txt`, just
+pointed at localhost with a dummy key, instead of adding a new dependency.
+No API key, no cost. Storage is the `postgres`/pgvector container from
+`docker-compose.yml` (already used for nothing until this phase);
+`PgVectorStore` now creates its own extension + table on first use instead
+of requiring a manual migration step. See `docs/interfaces.md`'s
+"Embedding provider" and "Chatbot LLM" rows for the swap back to OpenAI.
+
+- [x] Pick a document corpus relevant to the domain you chose (product docs, support tickets, whatever fits) -- used this repo's own `docs/*.md`
+- [x] `ai_rag/ingest_embeddings.py` chunks and embeds into pgvector (local) — swap to Databricks Vector Search later if you want the "stays in platform" story
+- [x] `ai_rag/vector_store.py` interface, pgvector implementation
+- [x] Simple retrieval + LLM answer script (`ai_rag/ask.py`)
 - **Demo artifact:** a question answered correctly with a citation back to the source doc.
 
+### Local dev walkthrough
+
+```powershell
+# one-time setup
+winget install --id Ollama.Ollama            # or download from ollama.com
+ollama pull nomic-embed-text                 # embedding model, ~274MB
+ollama pull llama3.2:3b                      # answer LLM, ~2GB
+
+docker compose up -d                         # postgres/pgvector
+
+# ingest the corpus (re-run after truncating `documents` if you re-ingest --
+# chunk ids are random per run, so repeats duplicate rather than replace)
+python ai_rag/ingest_embeddings.py --corpus-path "docs/*.md"
+
+# ask a question
+python ai_rag/ask.py "What message broker does the streaming phase use locally?"
+```
+
+Known tradeoff of the small local LLM: it answers correctly but is less
+consistent than a hosted model (e.g. GPT-4o-mini) about following
+formatting instructions like inline citations -- `ask.py` prints the
+retrieved sources itself, deterministically, rather than depending on the
+model to always mention them in prose.
+
 ## Phase 7 — Wastage detection
-- [ ] `metadata/wastage_models/` — SQL/dbt models over `pipeline_runs`:
-  - tables written but never read downstream (join against query history if available, or track reads via the emitter too)
-  - jobs with a rising runtime trend over the last N runs
-  - near-duplicate pipelines producing overlapping output schemas
-  - estimated cost per pipeline (DBU usage x list price, or cluster size x runtime as a proxy)
+
+**Local-first path:** `metadata/wastage_report.py` runs all four checks
+against the real `pipeline_runs` Delta table and prints one unified
+findings table -- the literal demo artifact. Two of the checks are plain
+DuckDB SQL (`metadata/wastage_models/*.sql`, assuming a `pipeline_runs`
+view is already registered -- see the script); the schema-overlap check is
+Python, since it needs to introspect each output table's actual columns
+across two different storage shapes (DuckDB-native silver/gold vs.
+standalone Delta paths for bronze/streaming-gold), which isn't naturally
+one SQL query.
+
+Fixed two real bugs surfaced while building this: (1) `run_dbt.py`
+declared its bronze inputs as hardcoded relative-path strings that never
+matched the absolute paths `autoloader_job.py` actually wrote, so bronze
+tables were always (wrongly) flagged as unused -- now derived from
+`sources.yaml` via `autoloader_job.load_sources()`, one source of truth;
+(2) a dbt run building multiple models jammed them into one comma-joined
+`output_table` string (order not even stable across runs, since dbt's
+model execution order varies), so `pipeline_runs`' schema changed
+`output_table` (string) to `output_tables` (list), matching `input_tables`'s
+existing design -- one row per table, same as everywhere else.
+
+Verified live: ran the batch demo 8x (growing bronze data 5,000 -> 40,000
+orders) plus the streaming demo once, then ran the report against that
+real history -- it correctly cleared bronze (genuinely read by every dbt
+run) while flagging the streaming gold table (genuinely never read
+downstream) and all three dbt-built tables (flagged due to a known,
+documented limitation: job-level lineage can't see that dbt's own
+`daily_revenue` model consumes `stg_orders`/`stg_customers` internally,
+only that no *other* job declared them as an input -- real OpenLineage
+would get this from dbt's manifest.json instead), and a genuine (not
+fabricated) rising-runtime trend on `autoloader_orders` from the growing
+data volume.
+
+- [x] `metadata/wastage_models/` — SQL/dbt models over `pipeline_runs`:
+  - [x] tables written but never read downstream (join against query history if available, or track reads via the emitter too) -- local dev uses the emitter's `input_tables` fallback (see `unused_tables.sql`'s comment for the known limitation)
+  - [x] jobs with a rising runtime trend over the last N runs (last-5-vs-prior-5 average, `cost_and_runtime_trend.sql`)
+  - [x] near-duplicate pipelines producing overlapping output schemas (`wastage_report.py`'s `check_duplicate_schemas`, column-overlap based)
+  - [x] estimated cost per pipeline (`openlineage_emitter.py`'s `LOCAL_DEV_HOURLY_RATE_USD` proxy -- duration x a nominal rate, computed automatically in `end_run()` for every job type)
 - **Demo artifact:** a table of real or synthetic "wasteful" pipelines with a plain-English reason for each.
+
+### Local dev walkthrough
+
+```powershell
+# needs real run history to find anything -- the more runs (and the more
+# growing data volume), the more genuine the runtime-trend signal
+python scripts/run_phase1_local_demo.py   # repeat a few times
+python scripts/run_phase4_streaming_demo.py
+
+python metadata/wastage_report.py
+```
 
 ## Phase 8 — Ops chatbot
 - [ ] Reuse `ai_rag/vector_store.py` against `pipeline_runs` + the wastage models + pipeline docs

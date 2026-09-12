@@ -37,23 +37,45 @@ class VectorStore(ABC):
 class PgVectorStore(VectorStore):
     """Local/self-hosted implementation backed by Postgres + pgvector.
 
-    Requires the pgvector extension and a table matching the schema below:
+    Creates the extension and table itself (idempotent, same "lazily
+    create on first use" pattern as metadata/openlineage_emitter.py's Delta
+    table) rather than requiring a separate manual migration step:
 
     CREATE EXTENSION IF NOT EXISTS vector;
     CREATE TABLE documents (
         id TEXT PRIMARY KEY,
         text TEXT,
         metadata JSONB,
-        embedding VECTOR(1536)
+        embedding VECTOR(dims)
     );
+
+    `dims` must match whatever embedding model is actually in use -- 768
+    for Ollama's `nomic-embed-text` (the local dev default, see
+    ingest_embeddings.py), 1536 for OpenAI's `text-embedding-3-small`.
     """
 
-    def __init__(self, dsn: str, table: str = "documents", dims: int = 1536):
+    def __init__(self, dsn: str, table: str = "documents", dims: int = 768):
         import psycopg2  # local import so this module imports cleanly without the driver installed
 
         self.conn = psycopg2.connect(dsn)
         self.table = table
         self.dims = dims
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.table} (
+                    id TEXT PRIMARY KEY,
+                    text TEXT,
+                    metadata JSONB,
+                    embedding VECTOR({self.dims})
+                )
+                """
+            )
+        self.conn.commit()
 
     def upsert(self, documents: list[Document], embeddings: list[list[float]]) -> None:
         import json

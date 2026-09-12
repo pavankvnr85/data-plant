@@ -62,7 +62,7 @@ def main():
         con.sql(
             f"""
             select job_name, job_type, status, started_at, duration_seconds,
-                   rows_written, output_table
+                   rows_written, output_tables
             from delta_scan('{pipeline_runs_path}')
             order by started_at
             """

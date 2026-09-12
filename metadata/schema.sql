@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS data_plant.metadata.pipeline_runs (
     rows_written       BIGINT,
     bytes_scanned     BIGINT,
     input_tables      ARRAY<STRING>,
-    output_table      STRING,
+    output_tables     ARRAY<STRING>,
     error_message     STRING,
     -- rough cost proxy: cluster size class x duration, refined later once
     -- real DBU billing data is available via the Databricks billing API

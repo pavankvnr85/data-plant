@@ -24,6 +24,14 @@ from typing import Optional
 import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
 
+# Phase 7 (wastage detection) needs *some* cost figure per run to rank
+# pipelines by spend. There's no real cloud bill locally, so this is a
+# rough proxy -- duration x a nominal hourly rate, standing in for the
+# eventual DBU-based number schema.sql's own comment describes ("cluster
+# size class x runtime as a proxy" is exactly this, just made concrete).
+# Picked to be small and clearly a placeholder, not tuned to anything real.
+LOCAL_DEV_HOURLY_RATE_USD = 0.20
+
 PIPELINE_RUN_SCHEMA = pa.schema(
     [
         pa.field("run_id", pa.string()),
@@ -37,7 +45,7 @@ PIPELINE_RUN_SCHEMA = pa.schema(
         pa.field("rows_written", pa.int64()),
         pa.field("bytes_scanned", pa.int64()),
         pa.field("input_tables", pa.list_(pa.string())),
-        pa.field("output_table", pa.string()),
+        pa.field("output_tables", pa.list_(pa.string())),
         pa.field("error_message", pa.string()),
         pa.field("estimated_cost_usd", pa.float64()),
     ]
@@ -79,7 +87,7 @@ class PipelineRunEmitter:
             rows_written=None,
             bytes_scanned=None,
             input_tables=run.input_tables,
-            output_table=None,
+            output_tables=[],
             error_message=None,
             estimated_cost_usd=None,
         )
@@ -92,11 +100,13 @@ class PipelineRunEmitter:
         rows_written: Optional[int] = None,
         rows_read: Optional[int] = None,
         bytes_scanned: Optional[int] = None,
-        output_table: Optional[str] = None,
+        output_tables: Optional[list[str]] = None,
         estimated_cost_usd: Optional[float] = None,
     ) -> None:
         ended_at = datetime.now(timezone.utc)
         duration = (ended_at - run.started_at).total_seconds()
+        if estimated_cost_usd is None:
+            estimated_cost_usd = duration * LOCAL_DEV_HOURLY_RATE_USD / 3600
         self._write(
             run_id=run.run_id,
             job_name=run.job_name,
@@ -109,7 +119,7 @@ class PipelineRunEmitter:
             rows_written=rows_written,
             bytes_scanned=bytes_scanned,
             input_tables=run.input_tables,
-            output_table=output_table,
+            output_tables=output_tables or [],
             error_message=None,
             estimated_cost_usd=estimated_cost_usd,
         )
@@ -128,7 +138,7 @@ class PipelineRunEmitter:
             rows_written=None,
             bytes_scanned=None,
             input_tables=run.input_tables if run else [],
-            output_table=None,
+            output_tables=[],
             error_message=error,
             estimated_cost_usd=None,
         )

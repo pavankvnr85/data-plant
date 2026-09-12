@@ -176,7 +176,7 @@ def run_streaming_job(
                 status="success",
                 rows_read=batch_events,
                 rows_written=len(rows),
-                output_table=GOLD_TABLE_PATH,
+                output_tables=[GOLD_TABLE_PATH],
             )
             print(f"micro-batch: {batch_events} raw events, {len(rows)} window(s) finalized")
     except KeyboardInterrupt:
@@ -195,7 +195,7 @@ def run_streaming_job(
             _merge_gold(leftover)
             consumer.commit()
             emitter.end_run(
-                flush_run, status="success", rows_written=len(leftover), output_table=GOLD_TABLE_PATH
+                flush_run, status="success", rows_written=len(leftover), output_tables=[GOLD_TABLE_PATH]
             )
             print(f"final flush: merged {len(leftover)} remaining window(s)")
         consumer.close()

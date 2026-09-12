@@ -27,7 +27,21 @@ DBT_PROJECT_DIR = REPO_ROOT / "transform" / "dbt_project"
 WAREHOUSE_PATH = REPO_ROOT / "lakehouse" / "warehouse.duckdb"
 
 sys.path.append(str(REPO_ROOT / "metadata"))
+sys.path.append(str(REPO_ROOT / "ingestion" / "batch"))
 from openlineage_emitter import PipelineRunEmitter  # noqa: E402
+from autoloader_job import load_sources  # noqa: E402
+
+
+def _bronze_table_paths() -> list[str]:
+    """The same absolute paths autoloader_job.py records as each source's
+    output_tables -- computed from sources.yaml rather than hardcoded, so
+    this can't silently drift out of sync with what bronze ingestion
+    actually wrote (it used to: a hardcoded relative-path string here never
+    matched the absolute path recorded on the write side, so dbt's declared
+    "input" never matched bronze's declared "output" and the Phase 7
+    unused-tables check flagged bronze as unused even though dbt reads it
+    every run)."""
+    return [str(REPO_ROOT / s["bronze_table"]) for s in load_sources()]
 
 
 def count_rows(relations: list[tuple[str, str]]) -> int:
@@ -43,7 +57,7 @@ def count_rows(relations: list[tuple[str, str]]) -> int:
     return total
 
 
-def _invoke_dbt(select: Optional[str]) -> tuple[int, str]:
+def _invoke_dbt(select: Optional[str]) -> tuple[int, list[str]]:
     # dbt resolves profiles.yml's relative warehouse path -- and the bronze
     # sources' relative delta_scan() path -- against the current working
     # directory, so both the dbt run and the row-count query below have to
@@ -62,8 +76,8 @@ def _invoke_dbt(select: Optional[str]) -> tuple[int, str]:
     finally:
         os.chdir(original_cwd)
 
-    output_table = ", ".join(f"{schema}.{name}" for schema, name in relations)
-    return rows_written, output_table
+    output_tables = [f"{schema}.{name}" for schema, name in relations]
+    return rows_written, output_tables
 
 
 def run_dbt_job(
@@ -82,14 +96,11 @@ def run_dbt_job(
     run = emitter.start_run(
         job_name=job_name,
         job_type="dbt",
-        input_tables=[
-            "lakehouse/bronze/orders",
-            "lakehouse/bronze/customers",
-        ],
+        input_tables=_bronze_table_paths(),
     )
 
     try:
-        rows_written, output_table = _invoke_dbt(select)
+        rows_written, output_tables = _invoke_dbt(select)
     except Exception as e:
         emitter.fail_run(job_name=job_name, error=str(e), run=run)
         raise
@@ -98,9 +109,9 @@ def run_dbt_job(
         run,
         status="success",
         rows_written=rows_written,
-        output_table=output_table,
+        output_tables=output_tables,
     )
-    print(f"{job_name} OK -- {rows_written} total rows -> {output_table}")
+    print(f"{job_name} OK -- {rows_written} total rows -> {', '.join(output_tables)}")
 
 
 def main():
